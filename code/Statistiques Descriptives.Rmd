@@ -20,10 +20,10 @@ library(sandwich)
 library(lmtest)
 
 
-df <- read_dta("data/waveI_young_women_sample.dta")
-df_2 <- read_dta("data/waveIII_young_women_sample.dta")
-df_all <- read_dta("data/waveIII.dta")
-df_hh <- read_dta("data/waveI_households.dta")
+df <- read_dta("../data/waveI_young_women_sample.dta")
+df_2 <- read_dta("../data/waveIII_young_women_sample.dta")
+df_all <- read_dta("../data/waveIII.dta")
+df_hh <- read_dta("../data/waveI_households.dta")
 ```
 
 ***
@@ -213,9 +213,9 @@ On s'intéresse à la dernière vague : dataframe plus complète en terme de var
 ```{r import_jointure}
 
 # Charger les trois fichiers
-df      <- read_dta("data/waveI_young_women_sample.dta")
-df_end  <- read_dta("data/waveIII_young_women_sample.dta")
-df_wave3 <- read_dta("data/waveIII.dta")
+df      <- read_dta("../data/waveI_young_women_sample.dta")
+df_end  <- read_dta("../data/waveIII_young_women_sample.dta")
+df_wave3 <- read_dta("../data/waveIII.dta")
 
 # Variables à récupérer depuis wave_III
 vars_w3 <- c("girlID",
