@@ -1,0 +1,791 @@
+---
+title: "Statistiques Descriptives - StatApp"
+author: "Emilie Le, Bruno Moreira de Abreu, Roméo Somitondji"
+date: "`r Sys.Date()`"
+output: pdf_document
+---
+
+## Importation des librairies et des bases de données
+
+On commence par importer les librairies et les bases de données nécessaires.
+
+```{r setup, message=FALSE, warning=FALSE}
+library(haven)
+library(psych)
+library(ggplot2)
+library(patchwork)
+library(tidyr)
+library(dplyr)
+library(sandwich)
+library(lmtest)
+
+
+df <- read_dta("waveI_young_women_sample.dta")
+df_2 <- read_dta("waveIII_young_women_sample.dta")
+df_all <- read_dta("waveIII.dta")
+df_hh <- read_dta("waveI_households.dta")
+```
+
+***
+
+# Première vague : wave I (baseline)
+
+## Aperçu général
+
+```{r apercu}
+# head(df)
+dim(df)      # 11350 obs, 26 variables
+names(df)
+```
+
+*Commentaires* : La base de données initiale contient 11350 observations, soit 11350 filles interrogées lors de la première vague de questionnaire. 
+
+Dans le cadre de notre projet, il convient de nous intéresser à quelques variables en particulier : âge de mariage souhaité, éducation à la baseline, éducation de la mère... Ces données sont trouvables dans deux bases de données : la wave I et la wave III.
+
+***
+
+## Stats descriptives globales
+
+```{r stats_psych}
+describe(df)
+```
+
+```{r missing}
+# Valeurs manquantes par variable
+colSums(is.na(df))
+```
+Peu de valeurs manquantes pour les variables qui nous intéressent.
+
+***
+
+## Statistiques sur l'âge
+
+```{r age}
+mean(df$bl_age_reported, na.rm = TRUE)       # ~13.2
+sd(df$bl_age_reported, na.rm = TRUE)
+median(df$bl_age_reported, na.rm = TRUE)
+range(df$bl_age_reported, na.rm = TRUE)      # 10 - 17
+table(df$bl_age_reported)                    # distribution par âge
+```
+
+On remarque que les filles interrogées ont entre 10 et 17 ans, et ont en moyenne 13 ans.
+
+***
+
+## Âge souhaité au mariage
+
+```{r age_mariage}
+mean(df$bl_desired_marriage_age, na.rm = TRUE)
+sd(df$bl_desired_marriage_age, na.rm = TRUE)
+table(df$bl_desired_marriage_age)
+```
+
+En moyenne, les filles souhaitent se marier à 20 ans, avec une forte proportion à 25 ans également. Cela ne reflète pas la réalité du mariage infantile, montrant que les jeunes filles ont sûrement peu de choix dans leur avenir matrimonial.
+
+***
+
+## Variables binaires / catégorielles
+
+```{r binaires}
+# Déjà mariée
+table(df$bl_ever_married)
+prop.table(table(df$bl_ever_married)) * 100    # en %
+
+# Type de traitement
+table(df$bl_treatment_type)
+prop.table(table(df$bl_treatment_type)) * 100
+```
+
+264 filles sont déjà mariées (tableau croisé avec l'âge de ces filles dans la partie 9). On voit que l'assignation au traitement suit bien le ratio présenté dans l'article. 
+
+***
+
+## Stats par groupe
+
+```{r par_groupe}
+# Âge moyen selon le type de traitement
+aggregate(bl_age_reported ~ bl_treatment_type, data = df, FUN = mean)
+```
+
+
+```{r}
+# Âge moyen selon déjà mariée ou non
+aggregate(bl_age_reported ~ bl_ever_married, data = df, FUN = mean)
+```
+C'est ce qu'on retrouve ensuite : les filles déjà mariées ont pour la grande majorité 17 ans (et sont donc à un âge plus avancé).
+
+```{r}
+# Âge souhaité au mariage selon le traitement
+aggregate(bl_desired_marriage_age ~ bl_treatment_type, 
+          data = df, FUN = mean, na.rm = TRUE)
+
+# Stats complètes par groupe
+aggregate(bl_age_reported ~ bl_treatment_type, data = df, 
+          FUN = function(x) c(mean = mean(x), sd = sd(x), n = length(x)))
+```
+
+On remarque que les caractéristiques par traitement sont bien équilibrées par rapport à l'âge à la baseline et l'âge de mariage souhaité. 
+ 
+***
+
+## Âge souhaité au mariage × âge des filles
+
+
+```{r}
+# Âge souhaité au mariage selon l'âge des filles
+aggregate(bl_desired_marriage_age ~ bl_age_reported, 
+          data = df, FUN = mean, na.rm = TRUE)
+
+# Stats complètes par âge
+aggregate(bl_desired_marriage_age ~ bl_age_reported, data = df, 
+          FUN = function(x) c(mean = mean(x, na.rm = TRUE), 
+                              sd   = sd(x, na.rm = TRUE), 
+                              n    = length(x)))
+
+# Tableau croisé : tranches d'âge x âge souhaité au mariage
+df$tranche_age <- cut(df$bl_age_reported, 
+                      breaks = c(9, 11, 13, 15, 17),
+                      labels = c("10-11", "12-13", "14-15", "16-17"))
+
+aggregate(bl_desired_marriage_age ~ tranche_age, 
+          data = df, FUN = mean, na.rm = TRUE)
+```
+*Commentaire* : Finalement, il n'y a pas vraiment d'impact sur l'âge du mariage souhaité et la tranche d'âge de la personne interrogée. L'âge de mariage souhaité augmente au fil de l'âge.
+
+***
+
+## Visualisation de l'âge de mariage vs le taux de filles mariées à la baseline
+
+```{r}
+# Tableau croisé : tranches d'âge x âge souhaité au mariage
+df$tranche_age <- cut(df$bl_age_reported,
+breaks = c(9, 11, 13, 15, 17),
+labels = c("10-11", "12-13", "14-15", "16-17"))
+aggregate(bl_desired_marriage_age ~ tranche_age,
+data = df, FUN = mean, na.rm = TRUE)
+
+prop_mariees <- tapply(df$bl_ever_married, df$tranche_age,
+mean, na.rm = TRUE) * 100
+
+# Graphiques côte à côte
+
+# *** PRÉPARATION DES DONNÉES ***
+df_prop <- data.frame(
+  tranche = names(prop_mariees),
+  pourcentage = as.numeric(prop_mariees)
+)
+
+
+# *** GRAPHIQUE 1 : Boxplot ***
+p1 <- ggplot(df, aes(x = tranche_age, y = bl_desired_marriage_age, fill = tranche_age)) +
+  geom_boxplot(alpha = 0.7, color = "#2b2d42") +
+  scale_fill_brewer(palette = "Blues") + # Palette automatique de bleus
+  theme_minimal() +
+  labs(title = "Âge souhaité au mariage",
+       subtitle = "Par tranche d'âge",
+       x = "Tranche d'âge", y = "Âge") +
+  theme(legend.position = "none")
+
+# *** GRAPHIQUE 2 : Barplot ***
+p2 <- ggplot(df_prop, aes(x = tranche, y = pourcentage)) +
+  geom_bar(stat = "identity", fill = "#219ebc", width = 0.7) + 
+  geom_text(aes(label = paste0(round(pourcentage, 1), "%")), vjust = -0.5, size = 3) +
+  theme_minimal() +
+  labs(title = "Pourcentage de filles mariées",
+       subtitle = "Par tranche d'âge",
+       x = "Tranche d'âge", y = "%") +
+  scale_y_continuous(limits = c(0, max(df_prop$pourcentage) + 10))
+
+# *** ASSEMBLAGE CÔTE À CÔTE ***
+p1 + p2 + plot_annotation(title = "Analyse comparative du mariage par tranche d'âge",
+                          caption = "Note : Le graphique a été réalisé à partir de l'échantillon large comprenant 11 350 jeunes filles (âgées de 10 à 17 ans).",
+                          theme = theme(plot.title = element_text(size = 16, face = "bold", hjust = 0.5)))
+```
+
+# Constitution de df_end
+
+On s'intéresse à la dernière vague : dataframe plus complète en terme de variables. On crée donc df_end afin de mener des statistiques sur l'échantillon young women's sample. Conformément au choix des auteurs, on garde seulement les filles qui avaient entre 15 et 17 ans et qui n'étaient pas mariées à la baseline. 
+
+***
+
+## Import & double jointure
+
+```{r import_jointure}
+
+# Charger les trois fichiers
+df      <- read_dta("waveI_young_women_sample.dta")
+df_end  <- read_dta("waveIII_young_women_sample.dta")
+df_wave3 <- df_all
+
+# Variables à récupérer depuis wave_III
+vars_w3 <- c("girlID",
+             "matchmaker_3", "has_primary", "has_secondary",
+             "bl_education", "bl_rural", "bl_girl_boy_ratio",
+             "bl_public_transit",        
+             "hh_village",
+             "secondary_complete", "age_gap",
+             "arranged_marriage",       
+             "outside_village", 
+             "husband_formal", "outside_union",
+             "distance_vc_ss",           
+             "matchmaker","el_age_predicted")
+
+# Variables à récupérer depuis Wave I
+vars_w1 <- c("girlID", 
+             "bl_desired_marriage_age",  # ← ajouté ici (vient du Wave I !)
+             "bl_earlypreg", 
+             "bl_treatment_type")
+
+
+# Jointure 1 : df_end + Wave I (baseline)
+df_end <- merge(df_end, df[, vars_w1], by = "girlID", all.x = TRUE)
+
+# Jointure 2 : df_end + wave_III (variables manquantes)
+df_end <- merge(df_end, df_wave3[, vars_w3], by = "girlID", all.x = TRUE)
+
+# Résoudre les doublons .x / .y après merge
+doublons <- c("arranged_marriage", "bl_public_transit", "distance_vc_ss",
+              "bl_desired_marriage_age")
+
+for (var in doublons) {
+  if (paste0(var, ".x") %in% names(df_end)) {
+    df_end[[var]] <- df_end[[paste0(var, ".x")]]
+    df_end[[paste0(var, ".x")]] <- NULL
+    df_end[[paste0(var, ".y")]] <- NULL
+  }
+}
+
+
+# Filtre : 15-17 ans au départ + non mariées à la baseline + suivies à l'endline
+df_end <- df_end[df_end$bl_age_reported >= 15 & df_end$bl_age_reported <= 17 &
+                 df_end$bl_ever_married == 0 &
+                 df_end$endline == 1, ]
+
+
+# Conversion des colonnes haven_labelled en numeric/factor
+df_end <- as.data.frame(lapply(df_end, function(x) {
+  if (inherits(x, "haven_labelled")) as.numeric(x) else x
+}))
+
+# Renommer si merge a créé des doublons
+if ("bl_desired_marriage_age.x" %in% names(df_end)) {
+  df_end$bl_desired_marriage_age <- df_end$bl_desired_marriage_age.x
+  df_end$bl_desired_marriage_age.x <- NULL
+  df_end$bl_desired_marriage_age.y <- NULL
+}
+
+dim(df_end)   # ~1821 obs
+```
+
+L'échantillon final est composé des 1821 filles (entre 15 et 17 ans, non mariées au début de l'expérience).
+
+***
+
+## Sélection des variables finales
+
+```{r selection_vars}
+vars_finales <- c("girlID", "bl_age_reported", "treatment_type",
+                  # Éducation
+                  "bl_education", "education", 
+                  "bl_still_in_school", "still_in_school",
+                  "secondary_complete",
+                  # Ménage & famille
+                  "bl_HHsize", "older_sister", 
+                  "bl_mother_schooled", "bl_girl_boy_ratio",
+                  # Mariage
+                  "ever_married", "marriage_age", 
+                  "under_18", "under_16",
+                  "age_married_desired", "bl_desired_marriage_age",
+                  "arranged_marriage", "age_gap",
+                  # Infrastructure village
+                  "has_primary", "has_secondary",
+                  "matchmaker_3", "bl_rural",
+                  "bl_public_transit", "distance_vc_ss",
+                  # Autres variables
+                  "outside_village", "outside_union",
+                  "husband_formal","hh_village","high_g_cons",
+                  "high_p_cons",
+                  "marriage_age","ever_birth_20","ever_worked","bl_income","CLUSTER")
+
+df_end <- df_end[, vars_finales]
+summary(df_end)
+```
+
+*Commentaire* : On ne garde que les variables qui seront intéressantes pour les tests d'hétérogénéité et sur lesquels la revue de la littérature nous permet de nous concentrer : l'éducation, la taille du ménage, les variables liées au mariage, l'infrastructure du village et d'autres variables. 
+
+***
+
+## Stats descriptives — variables continues
+
+```{r cont_endline}
+# Éducation baseline vs endline
+data.frame(
+  Moment     = c("Baseline", "Endline"),
+  Moyenne    = c(mean(df_end$bl_education,        na.rm = TRUE),
+                 mean(df_end$education,            na.rm = TRUE)),
+  Ecart_type = c(sd(df_end$bl_education,          na.rm = TRUE),
+                 sd(df_end$education,              na.rm = TRUE))
+)
+
+# Âge souhaité au mariage baseline vs endline
+data.frame(
+  Moment     = c("Baseline", "Endline"),
+  Moyenne    = c(mean(df_end$bl_desired_marriage_age, na.rm = TRUE),
+                 mean(df_end$age_married_desired,     na.rm = TRUE)),
+  Ecart_type = c(sd(df_end$bl_desired_marriage_age,  na.rm = TRUE),
+                 sd(df_end$age_married_desired,       na.rm = TRUE))
+)
+```
+*Commentaire :* Il est normal que l'âge soit de deux années plus élevées dû à l'étirement temporel de l'expérience. Concernant l'âge de mariage souhaité, il y a un léger décalement vers la droite. 
+
+
+```{r}
+
+# Taille du ménage
+mean(df_end$bl_HHsize, na.rm = TRUE)
+sd(df_end$bl_HHsize, na.rm = TRUE)
+
+# Écart d'âge avec le mari (parmi mariées)
+mean(df_end$age_gap, na.rm = TRUE)
+```
+*Commentaire* : Ecart d'âge d'environ 5 ans avec le mari et un ménage à la baseline constitué de 4 à 5 personnes.
+
+***
+
+## Stats descriptives — variables binaires
+
+```{r bin_endline}
+vars_bin <- c("bl_still_in_school", "still_in_school", "secondary_complete",
+              "older_sister", "bl_mother_schooled",
+              "ever_married", "under_18", "under_16",
+              "arranged_marriage", "matchmaker_3",
+              "has_primary", "has_secondary",
+              "bl_rural", "bl_public_transit",
+              "outside_village", "husband_formal")
+
+recap <- data.frame(
+  Variable = vars_bin,
+  Pct_oui  = sapply(df_end[, vars_bin], 
+                    function(x) round(mean(x, na.rm = TRUE) * 100, 1))
+)
+print(recap)
+```
+
+*Commentaire* : 63.8% des filles interrogées sont toujours scolarisées au début de l'expérience et 63.5% ont une mère ayant poursuivi une éducation. 
+A la fin de l'expérience, seules 17,4% des filles sont encore scolarisées et 89.9% d'entre elles sont mariées. Dans 90.9% des cas, le mariage a été arrangé (reregarder à quoi correspondent chaque variable).
+
+***
+## Tableau de balance de la baseline
+
+```{r}
+mean(df_end$bl_age_reported, na.rm = TRUE)    
+mean(df_end$bl_still_in_school, na.rm = TRUE)   
+mean(df_end$bl_HHsize, na.rm = TRUE)    
+mean(df_end$matchmaker_3, na.rm = TRUE) 
+mean(df_end$bl_mother_schooled, na.rm = TRUE)    
+mean(df_end$bl_education, na.rm = TRUE) 
+mean(df_end$older_sister, na.rm = TRUE)   
+mean(df_end$bl_desired_marriage_age, na.rm = TRUE) 
+
+# older_sister par groupe de traitement
+aggregate(older_sister ~ treatment_type, data = df_end,
+          FUN = function(x) round(mean(x, na.rm=TRUE)*100, 1))
+
+# bl_age_reported par groupe de traitement
+aggregate(bl_age_reported ~ treatment_type, data = df_end,
+          FUN = function(x) round(mean(x, na.rm=TRUE), 2))
+
+# bl_still_in_school par groupe de traitement
+aggregate(bl_still_in_school ~ treatment_type, data = df_end,
+           FUN = function(x) round(mean(x, na.rm=TRUE)*100, 1))
+
+# bl_HHsize par groupe de traitement
+aggregate(bl_HHsize ~ treatment_type, data = df_end,
+          FUN = function(x) round(mean(x, na.rm=TRUE), 2))
+
+# matchmaker_3 par groupe de traitement
+aggregate(matchmaker_3 ~ treatment_type, data = df_end,
+           FUN = function(x) round(mean(x, na.rm=TRUE)*100, 1))
+
+# bl_mother_schooled par groupe de traitement
+aggregate(bl_mother_schooled ~ treatment_type, data = df_end,
+           FUN = function(x) round(mean(x, na.rm=TRUE)*100, 1))
+
+# bl_education par groupe de traitement
+aggregate(bl_education ~ treatment_type, data = df_end,
+          FUN = function(x) round(mean(x, na.rm=TRUE), 2))
+
+# bl_desired_marriage_age par groupe de traitement
+aggregate(bl_desired_marriage_age ~ treatment_type, data = df_end,
+          FUN = function(x) round(mean(x, na.rm=TRUE), 2))
+```
+
+## Test des égalités de moyenne dans le tableau de balance
+
+```{r}
+# Liste de tes variables
+vars_cont <- c("bl_age_reported", "bl_education", "bl_HHsize", "bl_desired_marriage_age")
+vars_cat  <- c("bl_still_in_school", "bl_mother_schooled", "older_sister")
+vars_all  <- c(vars_cont, vars_cat)
+
+# P-value via régression OLS avec erreurs-types clusterisées
+p_clustered <- sapply(vars_all, function(v) {
+  formula <- as.formula(paste(v, "~ factor(treatment_type)"))
+  reg <- lm(formula, data = df_end)
+  # Test F avec erreurs-types clusterisées au niveau CLUSTER
+  ct <- coeftest(reg, vcov = vcovCL(reg, cluster = ~CLUSTER))
+  # P-value du test joint (F-test)
+  wt <- waldtest(reg, vcov = vcovCL(reg, cluster = ~CLUSTER))
+  round(wt$`Pr(>F)`[2], 3)
+})
+
+print(p_clustered)
+```
+
+
+## Visualisations supplémentaires pour la baseline
+
+```{r visu_scolarisation_2}
+# Créer tranche_age dans df_end
+df_end$tranche_age <- cut(df_end$bl_age_reported,
+                          breaks = c(14, 15, 16, 17),
+                          labels = c("15", "16", "17"),
+                          include.lowest = TRUE)
+
+scol <- tapply(df_end$bl_still_in_school, df_end$tranche_age,
+               mean, na.rm = TRUE) * 100
+barplot(scol,
+        main = "% de filles scolarisées par âge (baseline)",
+        xlab = "Âge", ylab = "%",
+        col = "steelblue", ylim = c(0, 100))
+```
+
+```{r visu_education_traitement}
+educ_trt <- aggregate(bl_education ~ treatment_type, 
+                      data = df_end, FUN = mean)
+barplot(educ_trt$bl_education,
+        names.arg = paste("Trt", educ_trt$treatment_type),
+        main = "Éducation moyenne par groupe de traitement (baseline)",
+        xlab = "Groupe", ylab = "Années d'éducation",
+        col = c("lightblue", "steelblue", "royalblue", "navy"),
+        ylim = c(0, max(educ_trt$bl_education) + 1))
+```
+
+## Endline : Stats par groupe de traitement
+
+```{r groupe_endline}
+# Outcomes principaux par groupe
+aggregate(ever_married ~ treatment_type, data = df_end,
+          FUN = function(x) round(mean(x, na.rm=TRUE)*100, 1))
+
+aggregate(still_in_school ~ treatment_type, data = df_end,
+          FUN = function(x) round(mean(x, na.rm=TRUE)*100, 1))
+
+aggregate(age_married_desired ~ treatment_type, data = df_end,
+          FUN = mean, na.rm = TRUE)
+
+aggregate(secondary_complete ~ treatment_type, data = df_end,
+          FUN = function(x) round(mean(x, na.rm=TRUE)*100, 1))
+```
+
+*Commentaire - Outcome principaux par groupe* : A la fin de l'expérience, on remarque que le groupe ayant reçu le troisième traitement présente un taux plus faible de filles mariées. Le troisième traitement correspond à l'incitation financière combinée à l'empowerment (1 : Empowerment, 2 : Incentive ; Traitement 4 : groupe de contrôle)
+
+```{r}
+# bl_HHsize : ménage de la fille au début
+cat("Taille ménage moyenne :", round(mean(df_end$bl_HHsize, na.rm=TRUE), 2), "\n")
+cat("(Variable mesurée à la baseline = ménage d'origine de la fille)\n")
+
+# older_sister par groupe de traitement
+aggregate(older_sister ~ treatment_type, data = df_end,
+          FUN = function(x) round(mean(x, na.rm=TRUE)*100, 1))
+
+# matchmaker_3, has_primary, has_secondary, bl_mother_schooled
+vars_infra <- c("matchmaker_3", "has_primary", "has_secondary", "bl_mother_schooled")
+sapply(df_end[, vars_infra], function(x) round(mean(x, na.rm=TRUE)*100, 1))
+```
+
+*Commentaire* : 70.9% des ménages possèdent trois matchmaker ou plus. A l'endline, moitié des filles ont complété l'éducation primaire et un peu plus d'un quart le secondaire. 
+
+```{r visu_endline}
+# Évolution de la scolarisation baseline / endline par groupe de traitement
+
+# % scolarisées baseline par traitement
+scol_bl <- aggregate(bl_still_in_school ~ treatment_type,
+                     data = df_end,
+                     FUN = function(x) mean(x, na.rm = TRUE) * 100)$bl_still_in_school
+
+# % scolarisées endline par traitement
+scol_el <- aggregate(still_in_school ~ treatment_type,
+                     data = df_end,
+                     FUN = function(x) mean(x, na.rm = TRUE) * 100)$still_in_school
+
+df_plot_scol <- data.frame(
+  Traitement = paste("Tr", 1:4),
+  Baseline = scol_bl,
+  Endline = scol_el
+) %>%
+  pivot_longer(cols = c(Baseline, Endline), names_to = "Temps", values_to = "Pourcentage")
+
+
+ggplot(df_plot_scol, aes(x = Traitement, y = Pourcentage, fill = Temps)) +
+  geom_bar(stat = "identity", position = position_dodge(width = 0.8), width = 0.7) +
+  geom_text(aes(label = paste0(round(Pourcentage, 1), "%")), 
+            position = position_dodge(width = 0.8), vjust = -0.5, size = 3.5, fontface = "bold") +
+  scale_fill_manual(values = c("Baseline" = "#457b9d", "Endline" = "#e63946")) +
+  labs(title = "Évolution de la scolarisation par groupe de traitement",
+       subtitle = "Comparaison entre le début (baseline) et la fin (endline) de l'étude",
+       x = "Groupe de traitement", y = "Taux de scolarisation (%)",
+       caption = "Échantillon : 1821 filles âgées de 15 à 17 ans non mariées au début de l'étude.\nTr 1 : Empowerment | Tr 2 : Incentive | Tr 3 : Empowerment + Incentive | Tr 4 : Contrôle",
+       fill = "Phase :") +
+  theme_minimal() +
+  theme(legend.position = "top",
+        plot.title = element_text(face = "bold", size = 14),
+        panel.grid.major.x = element_blank()) +
+  ylim(0, 100)
+```
+
+```{r}
+# Taux de mariage par âge baseline (endline)
+
+prop_mar <- tapply(df_end$ever_married,
+                   df_end$bl_age_reported,
+                   mean,
+                   na.rm = TRUE) * 100
+
+df_mar_age <- data.frame(
+  age_baseline = names(prop_mar),
+  pourcentage = as.numeric(prop_mar)
+)
+
+ggplot(df_mar_age, aes(x = age_baseline, y = pourcentage)) +
+  geom_bar(stat = "identity", width = 0.6, fill = "steelblue") +
+  
+  geom_text(aes(label = paste0(round(pourcentage, 1), "%")), 
+            vjust = -0.8, size = 4, fontface = "bold") +
+  
+  scale_y_continuous(limits = c(0, 105), 
+                     breaks = seq(0, 100, 20),
+                     expand = expansion(mult = c(0, 0.05))) + 
+  
+  theme_minimal() +
+  labs(title = "Taux de mariage à l'endline par âge initial",
+       x = "Âge à la baseline", 
+       y = "Pourcentage (%)") +
+  
+  theme(
+    panel.grid.major.x = element_blank(),
+    panel.grid.minor = element_blank(),
+    axis.line.x = element_line(color = "black") # Souligne l'axe X pour plus de propreté
+  )
+```
+
+## Statistiques à la endline
+
+```{r}
+names(df_2)
+mean(df_end$age_gap, na.rm = TRUE)   
+mean(df_end$outside_village, na.rm = TRUE)   
+mean(df_end$under_18, na.rm = TRUE)   
+mean(df_end$arranged_marriage, na.rm = TRUE)   
+mean(df_end$ever_married, na.rm = TRUE)   
+mean(df_end$ever_birth_20, na.rm = TRUE)  
+mean(df_end$marriage_age, na.rm = TRUE)
+mean(df_end$el_age_predicted, na.rm = TRUE)   #23.88
+```
+```{r}
+# Variables binaires : pourcentage
+vars_pct <- c("outside_village", "under_18", "arranged_marriage", 
+              "ever_married", "ever_birth_20","ever_worked")
+
+for (v in vars_pct) {
+  cat(v, ":", round(mean(df_end[[v]], na.rm = TRUE) * 100, 1), "%\n")
+}
+
+# Variables continues : moyenne (sd)
+vars_cont <- c("age_gap", "marriage_age", "el_age_predicted","bl_income")
+
+for (v in vars_cont) {
+  cat(v, ":", round(mean(df_end[[v]], na.rm = TRUE), 2), 
+      "(", round(sd(df_end[[v]], na.rm = TRUE), 2), ")\n")
+}
+```
+
+## Selon l'indice de conservatisme
+
+```{r}
+
+# Variables d'outcome à analyser
+vars_outcome <- c("ever_married", "under_18", "still_in_school", 
+                  "secondary_complete", "age_married_desired",
+                  "ever_birth_20", "ever_worked")
+
+# ***- 1. CONSERVATISME DE LA FILLE (high_g_cons) ***-
+
+cat("=== CONSERVATISME DE LA FILLE (high_g_cons) ===\n\n")
+
+# Variables binaires → proportions
+for (v in vars_outcome) {
+  cat(v, ":\n")
+  print(aggregate(df_end[[v]] ~ df_end$high_g_cons, 
+                  FUN = function(x) round(mean(x, na.rm=TRUE)*100, 1)))
+  cat("\n")
+}
+
+# Variable continue : bl_income
+cat("bl_income :\n")
+aggregate(bl_income ~ high_g_cons, data = df_end,
+          FUN = function(x) c(mean = round(mean(x, na.rm=TRUE), 2),
+                              sd   = round(sd(x, na.rm=TRUE), 2)))
+
+# ***- 2. CONSERVATISME DES PARENTS (high_p_cons) ***-
+
+cat("\n=== CONSERVATISME DES PARENTS (high_p_cons) ===\n\n")
+
+# Variables binaires → proportions
+for (v in vars_outcome) {
+  cat(v, ":\n")
+  print(aggregate(df_end[[v]] ~ df_end$high_p_cons, 
+                  FUN = function(x) round(mean(x, na.rm=TRUE)*100, 1)))
+  cat("\n")
+}
+
+# Variable continue : bl_income
+cat("bl_income :\n")
+aggregate(bl_income ~ high_p_cons, data = df_end,
+          FUN = function(x) c(mean = round(mean(x, na.rm=TRUE), 2),
+                              sd   = round(sd(x, na.rm=TRUE), 2)))
+
+# ***- 3. Tableau récapitulatif  ***-
+
+cat("\n=== TABLEAU RÉCAP ===\n")
+
+recap_cons <- data.frame(
+  Variable = vars_outcome,
+  g_cons_0 = sapply(vars_outcome, function(v) 
+    round(mean(df_end[[v]][df_end$high_g_cons == 0], na.rm=TRUE)*100, 1)),
+  g_cons_1 = sapply(vars_outcome, function(v) 
+    round(mean(df_end[[v]][df_end$high_g_cons == 1], na.rm=TRUE)*100, 1)),
+  p_cons_0 = sapply(vars_outcome, function(v) 
+    round(mean(df_end[[v]][df_end$high_p_cons == 0], na.rm=TRUE)*100, 1)),
+  p_cons_1 = sapply(vars_outcome, function(v) 
+    round(mean(df_end[[v]][df_end$high_p_cons == 1], na.rm=TRUE)*100, 1))
+)
+colnames(recap_cons) <- c("Variable", 
+                           "Fille peu conservatrice", 
+                           "Fille très conservatrice",
+                           "Parents peu conservateurs", 
+                           "Parents très conservateurs")
+print(recap_cons)
+
+# bl_income séparément (variable continue)
+cat("\nbl_income selon conservatisme :\n")
+data.frame(
+  Groupe = c("Fille peu cons.", "Fille très cons.", 
+             "Parents peu cons.", "Parents très cons."),
+  Moyenne = c(
+    round(mean(df_end$bl_income[df_end$high_g_cons == 0], na.rm=TRUE), 2),
+    round(mean(df_end$bl_income[df_end$high_g_cons == 1], na.rm=TRUE), 2),
+    round(mean(df_end$bl_income[df_end$high_p_cons == 0], na.rm=TRUE), 2),
+    round(mean(df_end$bl_income[df_end$high_p_cons == 1], na.rm=TRUE), 2)
+  ),
+  SD = c(
+    round(sd(df_end$bl_income[df_end$high_g_cons == 0], na.rm=TRUE), 2),
+    round(sd(df_end$bl_income[df_end$high_g_cons == 1], na.rm=TRUE), 2),
+    round(sd(df_end$bl_income[df_end$high_p_cons == 0], na.rm=TRUE), 2),
+    round(sd(df_end$bl_income[df_end$high_p_cons == 1], na.rm=TRUE), 2)
+  )
+)
+```
+
+## Statistiques à la endline pour le groupe de contrôle seulement
+
+```{r}
+# ============================================================
+# RESTRICTION AU GROUPE CONTRÔLE (treatment_type == 4)
+# ============================================================
+
+df_control <- subset(df_end, treatment_type == 4)
+
+cat("Taille de l'échantillon Contrôle :", nrow(df_control), "\n\n")
+
+# *** Stats descriptives de base ***
+vars_pct <- c("outside_village", "under_18", "arranged_marriage", 
+              "ever_married", "ever_birth_20", "ever_worked")
+
+cat("=== POURCENTAGES (CONTRÔLE) ===\n")
+for (v in vars_pct) {
+  cat(v, ":", round(mean(df_control[[v]], na.rm = TRUE) * 100, 1), "%\n")
+}
+
+vars_cont <- c("age_gap", "marriage_age", "el_age_predicted", "bl_income")
+
+cat("\n=== MOYENNES ET SD (CONTRÔLE) ===\n")
+for (v in vars_cont) {
+  cat(v, ":", round(mean(df_control[[v]], na.rm = TRUE), 2), 
+      "(", round(sd(df_control[[v]], na.rm = TRUE), 2), ")\n")
+}
+
+# ============================================================
+# STATS SELON L'INDICE DE CONSERVATISME (DANS LE CONTRÔLE)
+# ============================================================
+
+vars_outcome <- c("ever_married", "under_18", "still_in_school", 
+                  "secondary_complete", "age_married_desired",
+                  "ever_birth_20", "ever_worked")
+
+# ***- 1. CONSERVATISME DE LA FILLE ***-
+cat("\n=== CONSERVATISME DE LA FILLE (high_g_cons) - GROUPE CONTRÔLE ===\n")
+for (v in vars_outcome) {
+  cat(v, ":\n")
+  print(aggregate(df_control[[v]] ~ df_control$high_g_cons, 
+                  FUN = function(x) round(mean(x, na.rm=TRUE)*100, 1)))
+}
+
+# ***- 2. CONSERVATISME DES PARENTS ***-
+cat("\n=== CONSERVATISME DES PARENTS (high_p_cons) - GROUPE CONTRÔLE ===\n")
+for (v in vars_outcome) {
+  cat(v, ":\n")
+  print(aggregate(df_control[[v]] ~ df_control$high_p_cons, 
+                  FUN = function(x) round(mean(x, na.rm=TRUE)*100, 1)))
+}
+
+# ***- 3. TABLEAU RÉCAP (CONTRÔLE UNIQUEMENT) ***-
+cat("\n=== TABLEAU RÉCAPITULATIF (GROUPE CONTRÔLE) ===\n")
+
+recap_cons_control <- data.frame(
+  Variable = vars_outcome,
+  g_cons_0 = sapply(vars_outcome, function(v) 
+    round(mean(df_control[[v]][df_control$high_g_cons == 0], na.rm=TRUE)*100, 1)),
+  g_cons_1 = sapply(vars_outcome, function(v) 
+    round(mean(df_control[[v]][df_control$high_g_cons == 1], na.rm=TRUE)*100, 1)),
+  p_cons_0 = sapply(vars_outcome, function(v) 
+    round(mean(df_control[[v]][df_control$high_p_cons == 0], na.rm=TRUE)*100, 1)),
+  p_cons_1 = sapply(vars_outcome, function(v) 
+    round(mean(df_control[[v]][df_control$high_p_cons == 1], na.rm=TRUE)*100, 1))
+)
+
+colnames(recap_cons_control) <- c("Variable", 
+                                "Fille peu cons. (C)", 
+                                "Fille très cons. (C)",
+                                "Parents peu cons. (C)", 
+                                "Parents très cons. (C)")
+print(recap_cons_control)
+
+# bl_income séparément
+cat("\nbl_income selon conservatisme (CONTRÔLE) :\n")
+print(data.frame(
+  Groupe = c("Fille peu cons.", "Fille très cons.", "Parents peu cons.", "Parents très cons."),
+  Moyenne = c(
+    round(mean(df_control$bl_income[df_control$high_g_cons == 0], na.rm=TRUE), 2),
+    round(mean(df_control$bl_income[df_control$high_g_cons == 1], na.rm=TRUE), 2),
+    round(mean(df_control$bl_income[df_control$high_p_cons == 0], na.rm=TRUE), 2),
+    round(mean(df_control$bl_income[df_control$high_p_cons == 1], na.rm=TRUE), 2)
+  ),
+  SD = c(
+    round(sd(df_control$bl_income[df_control$high_g_cons == 0], na.rm=TRUE), 2),
+    round(sd(df_control$bl_income[df_control$high_g_cons == 1], na.rm=TRUE), 2),
+    round(sd(df_control$bl_income[df_control$high_p_cons == 0], na.rm=TRUE), 2),
+    round(sd(df_control$bl_income[df_control$high_p_cons == 1], na.rm=TRUE), 2)
+  )
+))
+```
